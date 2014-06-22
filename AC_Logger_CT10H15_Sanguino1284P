@@ -1,0 +1,263 @@
+#include <LiquidCrystal.h>
+
+#include <TimerOne.h>
+
+#include <MsTimer2.h>
+
+#include <SD.h>
+
+//#include <EEPROM.h>
+
+LiquidCrystal lcd(18,19,20,21,22,23);
+
+volatile boolean ppsFlag, mesFlag;
+
+boolean recFlag;
+
+unsigned long v, vSum,v2Sum;
+
+float vAVE, vRMS;
+
+int RLvalue = 199; //RL抵抗の実測値（２００Ω）
+
+float VAvalue;
+
+byte vRMSbyte;
+
+int n, recN, count;
+
+int recInterval=60;            // 記録周期（120秒）
+
+const int chipSelect = 4;
+
+File logfile;
+
+char filename;
+
+int seccount = 0;
+
+
+void setup(){
+
+  //  pinMode(1, INPUT);               // モード切り替えピン
+
+//  digitalWrite(1, HIGH);
+
+  pinMode(13, OUTPUT);
+  pinMode(SS, OUTPUT);
+
+  analogReference(INTERNAL1V1);       // Aref=1.1V
+
+
+
+  Serial.begin(9600);
+
+  lcd.begin(2,16);
+
+
+  lcd.print("Start");  // 開始メッセージ表示して
+
+
+  lcd.clear();
+
+  recFlag=true;                   // 記録フラグON
+
+  count = recInterval - 1;        // すぐに記録開始されるようにしておく
+
+
+
+
+  MsTimer2::set(1000, T1);          // 1秒毎の割り込みでLOOPを回す
+
+  MsTimer2::start();
+
+
+
+//  pinMode(10, OUTPUT);
+  // Setup内項目ー＞ SDカードERROR処理(入っていない場合の処理)
+  if (!SD.begin(chipSelect)) {
+    error("Card failed, or not present");
+  }
+  lcd.setCursor(0,0);
+  lcd.print("card initialized.");
+    delay(200);
+    
+    logfile.print("sec,vAVE,vRMS");
+}
+
+
+
+
+
+void loop(){
+
+    seccount++;
+  while(ppsFlag == false){          // 1秒割り込み待ち
+
+  }
+
+  ppsFlag=false;
+
+  Timer1.initialize(160);           // 測定インターバルセット(160us)  
+
+  Timer1.attachInterrupt( T2 );     // Timer1起動
+
+  vSum=0;
+
+  v2Sum=0;
+
+  for(int n =1; n <=1250; n++){     // 160us×1250回=0.2秒
+
+    while(mesFlag == false){        // Timer1割り込み待ち（測定インターバル待ち）
+
+    }
+
+    mesFlag = false;
+
+    digitalWrite(13,HIGH);        
+
+    v = analogRead(A0);              // 電圧読み取り
+
+    vSum = vSum + v;                // Σx   計算
+
+    v2Sum = v2Sum + (v * v);        // Σx^2 計算
+
+    digitalWrite(13,LOW);
+
+  }
+
+  Timer1.stop();
+
+  vAVE = vSum / 625;                // 負側のデータは無いので625で割る
+
+
+  vRMS = sqrt(float(v2Sum / 625));  // 同上
+  
+  VAvalue = ((vRMS/RLvalue)*1500)*0.1;
+
+//  vRMSbyte = vRMS;                  // EEPROM保存用にbyteに変換（最大は255ｍV=255W)
+
+
+
+ 
+  Serial.print(vSum);
+
+  Serial.print(", ");
+
+  Serial.print(v2Sum);
+
+  Serial.print(", ");
+
+  Serial.println(vRMS);
+
+  lcd.clear();
+
+  lcd.setCursor(0,1);
+
+  lcd.print(vAVE,2);
+
+  lcd.setCursor(10,1);
+
+  lcd.print(vRMS,2);
+
+  lcd.setCursor(0,0);
+  
+  lcd.print(VAvalue,2);
+  
+  lcd.print("/VA(W)");
+  
+  sdlogSection();
+
+
+/*
+  if(recFlag==true){
+    
+  vAVECPM = vAVE++;
+  
+  vAVEm = vAVECPM / 60;
+
+    count++;
+
+    if(count == recInterval){       // 120秒周期で記録
+
+
+      lcd.setCursor(0,1);
+
+      lcd.print("Rec! ");
+
+    }
+
+    count=0;  
+//    vAVECPM = 0;
+  }
+
+*/
+
+}
+
+
+
+
+
+void T1() {                    // MsTimer2の割り込み処理
+
+  ppsFlag = true;              // ppsフラグをアサート
+
+}
+
+
+
+void T2() {                    // Timer1の割り込み処理
+
+  mesFlag = true;
+
+} 
+
+
+void sdlogSection(){
+
+  // ファイルを開く
+  File logfile = SD.open("aclogger.csv", FILE_WRITE);
+
+  // もしファイルが開けたら値を書き込む
+  if (logfile) {
+    
+  logfile.print(seccount);
+  
+  logfile.print(",");
+    
+  logfile.print(vAVE,3);
+
+  logfile.print(",");
+
+  logfile.print(vRMS,3);  
+  
+  logfile.print(",");
+
+  logfile.print(VAvalue,3);  
+
+  logfile.println("");
+  
+  logfile.close();
+      
+  }
+  // ファイルが開けなかったらエラーを出力
+  else {
+    lcd.setCursor(1,1);
+    lcd.print("SD Write_error");
+  
+    
+}
+}
+
+
+
+//SDカードのエラー処理結果を表示させる
+void error(char *str)
+{
+  lcd.setCursor(0,0);
+  lcd.print("error: ");
+  lcd.print(str);
+
+  while(1);
+}
