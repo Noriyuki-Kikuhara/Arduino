@@ -1,0 +1,218 @@
+#include <LiquidCrystal.h>
+#include <SD.h>
+
+LiquidCrystal lcd(2, 3, 4, 5, 6, 7);
+int SVPIN = analogRead (A0);
+int AMP1 = analogRead (A1);
+int AMP2 = analogRead (A2);
+int SVAMPpin = analogRead (A4); //SparkfunACS712 SEN08883
+int underValue = 9.0;      //iPhoneの充電エラー対策用
+int ThroughCurrent = 290; //低電流充電する機器用にスルー域設定
+float AMP1value = 0.0;
+float AMP2value = 0.0;
+double SVvalue = 0.0;
+float SVAMPvalue = 0.0;
+unsigned long tick1 = 0;
+unsigned long tick2 = 0;
+float ampSec1 = 0;
+float ampSec2 = 0;
+const int chipSelect = 8;
+File logfile;
+
+
+void setup(){
+   lcd.begin(16, 2);
+   pinMode(9,OUTPUT);  //リレー１用
+   pinMode(10,OUTPUT);  //リレー２用
+   digitalWrite(9,LOW);  //リレー初期値はOFF
+   digitalWrite(10,LOW);  // 〃
+   pinMode(17,OUTPUT);  //SD書き込み時LED
+   digitalWrite(17,LOW);  //LED初期値OFF
+   
+
+// Setup内項目ー＞ SDカードERROR処理(入っていない場合の処理)
+  if (!SD.begin(chipSelect)) {
+  error("Card failed, or not present");
+  }
+  lcd.setCursor(0,0);
+  lcd.print("card initialized.");
+  delay(200);
+  
+ 
+// Setup内項目ー＞ 連番ファイル作成処理
+   char filename[] = "Charge00.csv"; //拡張子はCSVでもいい(使い方次第）
+  for (uint8_t i = 0; i < 100; i++) {
+    filename[6] = i/10 + '0';
+    filename[7] = i%10 + '0';
+    if (! SD.exists(filename)) {
+      logfile = SD.open(filename, FILE_WRITE); 
+      break;
+    }
+  }
+  
+  if (! logfile) {
+  error("couldnt create file");
+  }
+  
+  lcd.setCursor(0,0);
+  lcd.print("Log:");
+  lcd.print(filename);
+  delay(300);
+ 
+  logfile.print("sec,ExV,ExAmp,AMP1/mA,AMP1/mAh,AMP2/mA,AMP2/mAh");
+  logfile.println("");
+}
+
+
+void loop() {
+   SolarVoltageSection();
+   SolarCurrentSection();
+   AMP1Section();
+   AMP2Section();
+   ampereHourSection();
+   LcdOutputSection();
+   sdLogSection();
+   delay(635);
+}
+
+
+//積算電流計
+void ampereHourSection(){
+    if (((tick1++) % 1) == 0) {
+    ampSec1 += (AMP1value / 3600); // add [mA * s]
+
+  }
+    if (((tick2++) % 1) == 0) {
+    ampSec2 += (AMP2value / 3600); // add [mA * s]
+  }
+}
+
+
+//USB１側電流検出＋リレー制御
+void AMP1Section(){
+    int ad1;
+    ad1 = analogRead(A1);
+    AMP1value = ad1;
+    if (AMP1value > 511) {
+    analogReference(INTERNAL);
+    (AMP1value = ad1 * 25);
+    }else{
+    analogReference(DEFAULT);
+    AMP1value = ad1 * 5;
+     }     
+    {
+    if(SVvalue < underValue){
+    digitalWrite(9,HIGH);
+    }else{
+    digitalWrite(9,LOW);
+  }
+    if(AMP1value < ThroughCurrent ){
+    digitalWrite(9,LOW);
+  }
+ }
+}
+
+
+//USB２側電流検出＋リレー制御
+void AMP2Section(){
+    int ad2;
+    ad2 = analogRead(A2);
+    AMP2value = ad2;
+    if (AMP2value > 511) {
+    analogReference(INTERNAL);
+   (AMP2value = ad2 * 25);
+    }else{
+    analogReference(DEFAULT);
+    AMP2value = ad2 * 5;
+       }
+  {
+    if(SVvalue < underValue ){
+    digitalWrite(10,HIGH);
+    }else{
+    digitalWrite(10,LOW);
+    }
+    if(AMP2value < ThroughCurrent ){
+    digitalWrite(10,LOW);
+    }
+  }
+}
+
+
+//ソーラーパネル（外部電源）の分圧抵抗による入力電圧検出
+void SolarVoltageSection(){
+    SVPIN = analogRead(A0);
+    SVvalue = SVPIN;
+    SVvalue *= 5;
+    SVvalue /= 1024;
+    SVvalue /= 9.6;
+    SVvalue *= 107;
+}
+
+
+//Sparkfun SEN-08883による外部入力電流検出
+void SolarCurrentSection(){
+  SVAMPpin = analogRead(A4);
+  SVAMPvalue = SVAMPpin;
+  SVAMPvalue *= 5000;
+  SVAMPvalue /= 1024;
+  SVAMPvalue -= 478;
+  SVAMPvalue *= 1000;
+  SVAMPvalue /= 133;
+  
+  
+}
+
+//LCD表示項目
+void LcdOutputSection(){
+   lcd.clear();
+   lcd.setCursor(5,0);
+   lcd.print(ampSec1,0);
+   lcd.print("/h");
+   lcd.setCursor(5,1);
+   lcd.print(ampSec2,0);
+   lcd.print("/h");
+   lcd.setCursor(0,0);
+   lcd.print(AMP1value,0);
+   lcd.print(":");
+   lcd.setCursor(0,1);
+   lcd.print(AMP2value,0);
+   lcd.print(":");
+   lcd.setCursor(12,1);
+   lcd.print(SVvalue,1);
+   lcd.setCursor(12,0);
+   lcd.print(SVAMPvalue,5);
+
+}
+
+
+//SDカードへのログ書き込み処理
+void sdLogSection(){
+  digitalWrite(17,HIGH);
+  logfile.print(tick1);
+  logfile.print(",");
+  logfile.print(SVvalue,1);
+  logfile.print(",");
+  logfile.print(SVAMPvalue,2);
+  logfile.print(",");
+  logfile.print(AMP1value,1);
+  logfile.print(",");
+  logfile.print(ampSec1,1);
+  logfile.print(",");
+  logfile.print(AMP2value,1);
+  logfile.print(",");
+  logfile.print(ampSec2,1);
+  logfile.println("");
+  digitalWrite(17,LOW);
+}
+
+//SDカードのエラー処理結果を表示させる
+void error(char *str)
+{
+  digitalWrite(9,HIGH);  //SDエラー時出力止める
+  digitalWrite(10,HIGH);  //SDエラー時出力止める
+  lcd.setCursor(0,0);
+  lcd.print("error: ");
+  lcd.print(str);
+  
+  while(1);
+}
